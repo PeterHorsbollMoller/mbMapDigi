@@ -1,0 +1,37 @@
+Declare Sub MapDigi
+Declare Sub Info						'Tekst til "?"-knappen
+Declare Sub Button_MapDigi				'Menustyring
+Declare Sub MifMid						'Danner MIF/MID med Korrekt Headerinformation vedr. koordsys og proj.
+Declare Sub Kote_Selection				'Håndtering af kotepunkter -> alle punkter fra opmålingsfilen
+Declare Sub Kote_process				'Dannelse af kote-laget
+Declare Sub Region_Selection			'Håndterer alle objekter fra kodebiblioteket som opmåles i logisk rækkefølge og som skal være flader i MI
+Declare Sub Region_process				'Videre håndtering af objekter fra kodebiblioteket, som opmåles i logisk rækkefølge og som skal være flader i MI
+Declare Sub Line_Selection				'Håndterer alle objekter fra kodebiblioteket som opmåles i logisk rækkefølge og som skal være linier i MI
+Declare Sub Line_process				'Videre håndtering af linie-objekter
+Declare Sub Point_Selection				'Håndterer alle objekter fra kodebiblioteket som skal være punkter i MI
+Declare Sub Point_process				'Videre håndtering af punkt-objekter
+Declare Sub ZZ_Selection				'Håndtering af zz-anlæg og felt1
+Declare Sub ZZ_process					'Videre håndtering af zz-anlæg og felt1
+
+Declare Sub ImportMIFMID				'Importerer mif/mid-filen
+Declare Sub Felt_tab					'Håndterer dennelse af evt. felt_trans.tab
+Declare Sub Anlg_tab					'Håndterer dannelse af evt. anlæg_trans.tab
+Declare Sub Kote_tab					'Håndterer dannelse af kote_trans.tab
+Declare Sub Bundkote_tab				'Håndterer dannelse af Bundkote_trans.tab
+Declare Sub Maalepunkt_tab				'Håndterer dannelse af evt. målepunkter_trans.tab
+Declare Sub Fund_tab					'Håndterer dannelse af evt. Fund_trans.tab
+Declare Sub Snit_tab					'Håndterer dannelse af evt. Snit_trans.tab
+Declare Sub Prove_tab					'Håndterer dannelse af evt. prøve_trans.tab
+Declare Sub Niveau_tab					'Håndterer dannelse af evt. niveauskift
+Declare Sub Lag_tab						'Håndterer dannelse af evt. Lag_trans.tab
+Declare Sub LineToCir					'Håndterer de cirkulære objekter
+Declare Sub Dan_tab						'Danner relevante tabeller, giver tabeller den rette kolonne-struktur, behandler feltud, kopiere "Bundkote" til kote-tabellen, fejlbahandling
+Declare Sub Clean_up					'Rydder op i tabeller og filer
+Declare Sub EndHandlerMD					'Rydder op i tilfælde af uventet program-stop
+
+Dim new_filePath, Newf_name  As String 		'hele stien til, hvor måledata (*.txt-filen) ligger, Sti til hjælpefil (måledatafil)
+Dim f_name, p_name, cur_AppPath As string	'Navn på måledatafilen (*.txt-filen), Sti til samme UDEN selve filnavnet (maaledata.txt osv), Sti til tomt txt-dokument->til MIF/MID-filer
+Dim n, n_col as Integer						'Globale variabele - primært til styring af zz-opmålinger
+Dim Slet_anlg_Num as String					'Check-box'en "Slet angivelser"
+Dim CoordProj As String						'Til styring af projektion i mif-headeren
+Dim ny_Anlg_Blaa as String					'Check-boxen "Blå anlæg?"

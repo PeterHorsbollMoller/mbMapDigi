@@ -1,0 +1,1870 @@
+Include "MAPBASIC.DEF"
+Include "ICONS.DEF"
+Include "Library\RibbonElements.def"
+
+Include "MapDigi.def"
+
+Include "Library\RIBBONLib.def"
+
+Define xProgram 		"MapDigi"
+Define xVersion 		"2.0.1"
+Define xYear			"2022"
+
+Define PATH_IMAGES		ApplicationDirectory$()
+
+Declare Sub Main
+Declare Sub EndHandler
+Declare Sub AddIn_About
+Declare Function AddIn_Name() As String
+Declare Function AddIn_Description() As String
+Declare Function AddIn_Version() As String
+Declare Function AddIn_ImageUri() As String
+
+'Grundidéen i MapDigi er via MIF/MID-formatet at danne topologi, farve og stilart til grafiske objekter i MapInfo - i store træk som det kendes fra ArkDigi,
+'direkte fra en tekst-baseret (*.txt/*.csv) opmålingsfil med 'formatet "X","Y","Z","Pnr","Kode+" "+anlgnr."(=det arkæologiske kodebibliotek til GPS/Totalstation).
+'Opmålingsfilen vil bliver dannet i en række MapInfo-tabeller:
+'anlæg+zz-anlæg (region), kote (point), fund (point), snit(pline), målepunkter (point), lag(region), Profil(linie), Niveau (pline), Bundkote(point),
+'Kote-punkt(point), Vand(region), Felt (felt2)+zz-felt(felt1) (region)
+'Cirkulære anlæg (kun to målinger) dannes i mif-filen som et "Line"-objekt, der i efterbearbejdningen af MIF/MID-filen omdannes til en cirkulær region.
+
+'Behandlingen foregår primært usynligt i MapInfo og hovedsagligt vha. selection kommandoer, der tilsyneladende foregår med en form for skjult indeksering,
+'og som er ganske meget hurtigere end eksempelvis "Fetch" kommandoen)...
+
+'**********************************************************************************************''
+Sub Main
+
+Dim	sTabName, sGroupName, sNameAfter As String,
+	nCtrlIdx As Integer
+
+	sTabName		= TAB_TABLE
+	sGroupName	= TAB_GROUP_TABLE_DATA
+
+	nCtrlIdx = RBNGroupAddButton("cmdMapDigi", "MapDigi", "", sTabName, sGroupName)
+	If nCtrlIdx > 0 Then
+		Call RBNControlSetToolTipIdx(nCtrlIdx, "MapDigi", "Omdan din opmålingsfil (*.txt) til MapInfo (*.tab-fil)", "")
+		Call RBNControlSetIconsIdx(nCtrlIdx, CONTROL_SIZE_LARGE, PATH_IMAGES & "MapDigi_32.png", PATH_IMAGES & "MapDigi_32.png")
+		Call RBNControlSetCustomMBXHandlerIdx(nCtrlIdx, "Button_MapDigi")
+	End If
+
+'	Alter Buttonpad TAB_GROUP_TABLE_DATA Add	'"MapDigi" Add
+'		PushButton
+'			Icon 8001 File "MapDigi.dll"
+'			HelpMsg "Omdan din opmålingsfil (*.txt) til MapInfo (*.tab-fil)\nMapDigi"
+'			Calling Button_MapDigi
+''		Separator
+''		PushButton
+''			Icon MI_ICON_NUMBERS_12
+''			Calling Info
+'		Tab TAB_TABLE
+
+End Sub
+
+'**********************************************************************************************''
+Sub EndHandler
+
+	Call RBNEndHandler
+
+End Sub
+
+'**********************************************************************************************''
+Sub Info
+	Note "MapDigi digitaliserer *.txt/*.csv-opmålingsfiler foretaget med ""ArkDigi""-kodebiblioteket i formatet x,y,z,p.nr,-kode + unik id."
+		+Chr$(10)
+		+Chr$(10)+"Museum Sønderjylland | www.msj.dk | Tomas Albæk Hunniche"	' | tohu@museum-sonderjylland.dk"
+		+Chr$(10)+"- i samarbejde med danske arkæologiske museer..."
+		+Chr$(10)
+		+Chr$(10)+"2022, v2.0: Mindre fejlrettelser | Precisely | Peter H. Møller"
+
+End Sub
+
+'**********************************************************************************************''
+Sub AddIn_About
+
+	Call Info
+
+End Sub
+
+'**********************************************************************************************''
+Function AddIn_Name() As String
+
+	AddIn_Name = xProgram
+
+End Function
+
+'**********************************************************************************************''
+Function AddIn_Description() As String
+
+	AddIn_Description = "MapDigi digitaliserer *.txt/*.csv-opmålingsfiler foretaget med ""ArkDigi"" -kodebiblioteket i formatet x,y,z,p.nr,-kode + unik id."
+
+End Function
+
+'**********************************************************************************************''
+Function AddIn_Version() As String
+
+	AddIn_Version = xVersion
+
+End Function
+
+'**********************************************************************************************''
+Function AddIn_ImageUri() As String
+
+	AddIn_ImageUri = PATH_IMAGES & "MapDigi_32.png"
+
+End Function
+
+'**********************************************************************************************''
+Sub Button_MapDigi
+
+Dim	Coordsys As Integer
+Dim	input_navn_dato As String
+Dim	Slet_Num_check, Anlg_Blaa as logical
+Dim	tab_count as Integer
+
+	'Undersøger om der findes åbne tabeller i MI
+	tab_count = NumTables()
+	If tab_count > 0 Then
+		Note "Der findes mindst én åben tabel i MapInfo."+chr$(10)+"Luk alle åbne tabeller og kør MapDigi igen."
+		Exit Sub
+	End If
+
+	CoordProj = "CoordSys Earth Projection 8, 115, ""m"", 9, 0, 0.9996, 500000, 0 Bounds (50000, 5750000) (1050000, 6750000)"
+
+	Dialog
+		Title "MapDigi"
+		Width 166 Height 148
+
+		Control StaticText
+			Id 0
+			Position 23, 6
+			Width 119 Height 8
+			Title "Vælg koordinatsystem og projektion"
+
+		Control PopupMenu
+			Id 1
+			Position 23, 20
+			Width 120
+			Title "Euref89 (ETRS89) UTM zone 32;Euref89 (ETRS89) UTM zone 33;System 34 Jylland-Fyn;System 34 Sjælland;Lokal-plan meter (-10000,10000);Gauss-Krüger (DHDN) zone 3"
+			Into Coordsys
+
+		Control OKButton
+			Title "OK"
+			'Id 2
+			Position 23, 76
+			Width 51 Height 30
+
+		Control CancelButton
+			Title "Cancel"
+			'Id 3
+			Position 92, 76
+			Width 51 Height 30
+
+		Control CheckBox
+			'Id 4
+			Position 25, 130
+			Width 70
+			Title "Slet koder!"
+			Into Slet_num_Check
+			Value 0
+
+		Control CheckBox
+			'Id 5
+			Position 100, 130
+			Width 70
+			Title "Blå anlæg?"
+			Into Anlg_Blaa
+			Value 0
+
+	If CommandInfo(CMD_INFO_DLG_OK) Then
+
+		'undersøger om der er sat "check" i "slet angivelser"- check-boxen
+		If Slet_num_Check = "True" Then
+			Slet_anlg_Num = "ja"
+		Else
+			Slet_anlg_Num = "Nej"
+		End If
+
+		'undersøger om der er sat "check" i "Blå anlæg?"-check-boxen
+		If Anlg_Blaa = "True" Then
+			Ny_Anlg_Blaa = "ja"
+		Else
+			Ny_Anlg_Blaa = "Nej"
+		End If
+
+		'undersøger hvilken projektion m.m. der bliver valgt --> alle tabeller bliver herefter lavet efter dette valg
+		Do Case coordsys
+			Case 1
+				CoordProj = "CoordSys Earth Projection 8, 115, ""m"", 9, 0, 0.9996, 500000, 0 Bounds (50000, 5750000) (1050000, 6750000)"
+			Case 2
+				CoordProj = "CoordSys Earth Projection 8, 115, ""m"", 15, 0, 0.9996, 500000, 0 Bounds (-20000, 5750000) (800000, 6750000)"
+			Case 3
+				CoordProj = "CoordSys Earth Projection 21, 28, ""m"", 9, 0, 0.9996, 500000, 0 Bounds (-688662.009683, -1193504.42234) (42993.6256615, 466993.370036)"
+			Case 4
+				CoordProj = "CoordSys Earth Projection 22, 28, ""m"", 9, 0, 0.9996, 500000, 0 Bounds (-2981314.8749, -52667593.7197) (93265053.7016, 912774.431511)"
+			Case 5
+				CoordProj = "CoordSys NonEarth Units ""m"" Bounds (-10000, -10000) (10000, 10000)"
+			Case 6
+				CoordProj = "CoordSys Earth Projection 8, 1000, ""m"", 9, 0, 1, 3500000, 0 Bounds (-4748143.32561, -10000855.7646) (11748143.3256, 10000855.7646)"
+		End Case
+		Call MifMid
+	End If
+
+End Sub
+
+'**********************************************************************************************''
+Sub MifMid
+
+OnError GoTo ErrorHandle1
+
+Set ProgressBars Off
+
+'variable erklæret globalt
+new_filePath=FileOpenDlg(""," ","*.*","Vælg opmålingsfil->*.txt eller *.csv-> Tabellerne placeres i samme mappe som opmålingsfilen")
+f_name=PathToFileName$(new_filePath)
+p_name=PathToDirectory$(new_filePath)
+
+'Print "f_name: " & f_name
+'Print "p_name: " & p_name
+'Print "TXT?: " & (new_filePath like "%.txt")
+'Print "CSV?: " & (new_filePath like "%.csv")
+
+If new_filePath = "" Then
+	Note "Du valgte ikke en input fil til MapDigi!"
+	Exit sub
+End If
+
+If new_filePath like "%.txt" Then
+'	Print "Fortsætter med TXT-fil..."
+	Goto GoOn
+ElseIf new_filePath like "%.csv" Then
+'	Print "Fortsætter med CSV-fil..."
+	GoTo GoOn
+Else
+	Note "Den valgte fil er ikke en *.txt eller *.csv-fil!"
+	Exit Sub
+End If
+
+GoOn:
+'Print "Kontroller for eksisterende filer i den valgte mappe: " & p_name
+
+'Checker for problemer mht. tabelnavne i den valgte arbejdsmappe..
+If fileexists (p_name+"Kote_trans.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"+Chr$(10)+Chr$(10)+"Placér din opmålingsfil i en tom mappe.."+Chr$(10)+Chr$(10)+"Digitaliseringen afbrydes!"
+	Exit Sub
+End if
+
+If Fileexists(p_name+"Sel_felt.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End If
+
+If Fileexists(p_name+"Sel_anlg.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+end if
+
+'Print "4:"
+If Fileexists(p_name+"Sel_fund.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+If Fileexists(p_name+"Sel_maale.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+If Fileexists(p_name+"Sel_bund.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+If Fileexists(p_name+"Sel_fyld.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+'Print "8:"
+If Fileexists(p_name+"Sel_Niv.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+If Fileexists(p_name+"Sel_snit.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+If Fileexists(p_name+"Sel_lag.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+If FileExists(p_name+"maaledata_temp.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+'Print "12:"
+If FileExists(p_name+"PointSecondPass.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+If FileExists(p_name+"FirstPassSelEven.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+If FileExists(p_name+"FirstPassSelUnEven.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+If FileExists(p_name+"FirstPassCount2.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+'Print "16:"
+If FileExists(p_name+"FirstPass2.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+If FileExists(p_name+"FirstPass.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+If FileExists(p_name+"PnrEven.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+If FileExists(p_name+"PnrUnEven.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+'Print "20:"
+If FileExists(p_name+"IndexTab1.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+If FileExists(p_name+"maaledataTXT.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+If FileExists(p_name+"RegionSecondPass.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+If FileExists(p_name+"RegionSecondPassCount.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+'Print "24:"
+If FileExists(p_name+"LineSecondPass.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+If FileExists(p_name+"LineSecondPassCount.tab") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+If FileExists(p_name+"Kote.mif") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+'Print "27:"
+If FileExists(p_name+"maaledata.mif") Then
+	Note "Der findes MI-tabeller på den valgte placering. Dette kan medføre fejl under digitaliseringen!"
+	Exit Sub
+End if
+
+'Print "Ingen eksisterende filer fundet!"
+
+Dim v1, v2, v3, v5 as String 'Variable til at udvælge kolonner i måledata-filen
+Dim v4 As Integer
+'Print "Save File " & f_name
+Save file p_name+f_name As p_name+"maaledataPass.txt"		'Gemmer en kopi af den valgte oprindelige måle-fil under nyt navn
+Newf_name=p_name+"maaledataPass.txt" 					'den FULDE sti til maaledataPass.txt
+'Print "Open File " & f_name
+Open file p_name+f_name For Input As #3					'Åbner den oprindelige måle-fil
+'Print "Open File " & p_name+"maaledataPass.txt"
+Open file p_name+"maaledataPass.txt" For Output As #4		'Åbner kopien
+
+'Print "Opretter kopi " & p_name+"maaledataPass.txt"
+Do while not EOF(3)
+	input #3, v1, v2, v3, v4, v5 					'kopiere de 5 kolonner fra den oprindelige målefil til kopien som en tekststreng-> nødvendigt for at få det 3'de decimal med ind i MI ->32bit
+	If Not EOF(3) Then
+		Print #4, """"+v1+""""+","+""""+v2+""""+","+""""+v3+""""+","+v4+","+""""+v5+""""
+	End If
+Loop
+
+Close File #3
+Close File #4
+
+Rename File p_name+"maaledataPass.txt" As p_name+"maaledataTXT.txt"		'og _TXT(tekststreng, som bruges videre-->giver det 3´de decimal..)
+
+Print "Register Table " & p_name+"maaledataTXT.txt"
+Register Table p_name+"maaledataTXT.txt" TYPE ASCII Delimiter 44 Charset "WindowsLatin1" Into p_name+"maaledataTXT.tab"
+Open Table p_name+"maaledataTXT.tab"
+Select * from maaledataTXT order by col5
+Commit table maaledataTXT as p_name+"maaledata.tab"
+Open table p_name+"maaledata.tab"
+
+'Undersøger for evt. fejl i udtræk fra Laica..
+Select * from maaledata where col5 = "%." into Sel_LeicaCheck
+If Tableinfo (Sel_LeicaCheck,tab_info_nrows) > 0 Then
+	Do Until EOT(maaledata)
+		Fetch first from maaledata
+		If selection.col5 like "%." Then
+			Update SelectionNote Set col2=RTrim$(LTrim$(Mid$(col2,InStr(1,col2,".")+1,150)))
+		End if
+		Fetch next from maaledata
+	Loop
+End If
+
+Alter table "maaledata" (add Anlæg2 Char(150), NodeNum Integer Modify _col5 Char(150))
+commit table maaledata
+Update maaledata set col6=col5
+Commit table maaledata
+
+'giver alle anlæg et unikt id-nummer opdelt efter målesekvenser (hvis samme anlægsnummer forekommer i to seperate målesekvenser, behandles de som to forskellige anlæg).
+Select * from maaledata order by col5, col4 into Sel_maaledataUnikNum
+Update Sel_maaledataUnikNum set col5 = Col5 + " __"+ (col4 - rowid)
+Commit table maaledata
+
+'"Nul-stiller" koder, hvor der ikke kan/skal tages hensyn til dobbeltnumre --> "F1"/"-Felt1", "ZZ", "Fyldskifte"-målinger
+Select * from maaledata where col5 Like "F1%" or col5 Like "F2%" or col5 Like "F3%" or col5 Like "F4%" or col5 Like "F5%" or col5 Like "F6%" or col5 Like "F7%" or col5 Like "F8%" or col5 Like "F9%" or col5 Like "-Felt1%" or col5 Like "-Fyldskifte%" into Sel_maaledataUnikNum_ZZ Update Sel_maaledataUnikNum_ZZ set col5 = Col6
+Commit table maaledata
+
+Select col1,col2,col3,col4,col5,col6,count(*) from maaledata group by col5 into sel_NodeNum
+
+Add Column "maaledata" (NodeNum) From sel_NodeNum Set to Col7 where col5=col5 ' undersøger og opmærker objekttypen --> punkt eller et sammensat objekt
+Commit table maaledata
+
+Create table "Dummy" (Dummy1 char(1))	File P_name+"Dummy.tab" Type native Charset "WindowsLatin1"				'Danner et tomt *.txt dokument via en tom tabel til at danne mif og mid filer af..
+Open Table p_name+"Dummy.Tab"
+Export "Dummy" Into p_name+"Dummy.txt" Type "ASCII" Delimiter "," CharSet "WindowsLatin1"
+Save file p_name+"Dummy.txt" As p_name+"maaledata.mif"
+Save file p_name+"Dummy.txt" As p_name+"maaledata.mid"
+Save file p_name+"Dummy.txt" As p_name+"Kote.mif"
+Save file p_name+"Dummy.txt" As p_name+"Kote.mid"
+Kill p_name+"Dummy.txt"			'og sletter dummy-dokumentet igen
+Drop Table Dummy
+
+Open file PathToDirectory$(new_filePath)+"\maaledata.mif" For output As #1
+CharSet SystemInfo(SYS_INFO_CHARSET)
+Open file PathToDirectory$(new_filePath)+"\maaledata.mid" For output As #2
+CharSet SystemInfo(SYS_INFO_CHARSET)
+Open file PathToDirectory$(new_filePath)+"\Kote.mif" For output As #5
+CharSet SystemInfo(SYS_INFO_CHARSET)
+Open file PathToDirectory$(new_filePath)+"\Kote.mid" For output As #6
+CharSet SystemInfo(SYS_INFO_CHARSET)
+
+'Danner mif-filen til de temporere tabeller "maaledata" og "Kote"
+
+Print #1, "Version 300"
+Print #1, "Charset ""WindowsLatin1"""
+Print #1, "Delimiter "","""
+Print #1,  CoordProj
+Print #1, "Columns 3"
+Print #1, "Anl_gsangivelse Char(65)"
+Print #1, "Note Char(254)"
+Print #1, "Opm_lingsinfo Char(25)"
+Print #1, "Data"
+Print #1,""
+
+Print #5, "Version 300"
+Print #5, "Charset ""WindowsLatin1"""
+Print #5, "Delimiter "","""
+Print #5, CoordProj
+Print #5, "Columns 3"
+Print #5, "Kote Decimal (8,3)"
+Print #5, "Bundkote Decimal(8,3)"
+Print #5, "Note Char(50)"
+Print #5, "Data"
+Print #5,""
+
+'Print "Call ZZ_selection"
+Call ZZ_selection
+'Print "Call Region_Selection"
+Call Region_Selection
+'Print "Call Point_Selection"
+Call Point_Selection
+'Print "Call Line_Selection"
+Call Line_Selection
+'Print "Call Kote_Selection"
+Call Kote_Selection
+Print "Call ImportMIFMID"
+Call ImportMIFMID
+Print "End of MifMid"
+
+ErrorHandle1:
+	Call EndHandlerMD
+Exit Sub
+
+end sub
+
+
+'Behandler alle ZZ-anlæg ("krydsmålte" anlæg) - regioner
+'**********************************************************************************************''
+Sub ZZ_Selection  '(Processen benævnes "Firstpass" i ArkDigi-dokumentationen=zz-anlæg
+
+Select * from maaledata where col5 like "-Felt1%" or col5 like "-zz%" or Col5 Like "F1%" or Col5 Like "F2%" or Col5 like "F3%" or Col5 like "F4%" or Col5 like "F5%" or Col5 like "F6%" or Col5 like "F7%" or Col5 like "F8%" or Col5 like "F9%" Order by col5, col4 into FirstPass 		'Udvælger "firstpass-objekter"
+Commit Table FirstPass As p_name+"FirstPass.tab"
+If Fileexists(p_name+"FirstPass.tab") Then
+	Open Table p_name+"FirstPass.tab"
+
+	Commit table FirstPass
+
+	Select col5, Col7, col6 from FirstPass into FirstPassCount group by col5		'Tæller, hvor mange punkter det enkelte felt/anlæg består af..
+	Commit table FirstPass as p_name+"\FirstPass2.tab" 		'Gemmes da der ikke kan laves dynamiske sammenlægninger på query'en "FirstPass.tab" o.s.v.
+	Open table p_name+"\FirstPass2.tab"
+	Commit table FirstPassCount as p_name+"\FirstPassCount2.tab"	'Samme som oven over
+	Open table p_name+"\FirstPassCount2.tab"
+
+	'Tester for for få målte punkter --> Finder, gemmer (sender til fejllag) og sletter objekter (fra FirstPassCount2) med for få antal målte punkter
+
+'	Select * from FirstPassCount2 Where col2 < 3 into Sel_Fejl_zz
+'
+'
+'		If Tableinfo(Sel_Fejl_zz, tab_info_nrows)>0 Then
+'			Commit Table Sel_Fejl_zz As p_name+"Fejl_zz.tab"
+'			Select * from FirstPassCount2 where col2 < 3 into selection
+'			Delete from selection
+'			Commit table FirstPassCount2
+'		End If
+
+
+	Call ZZ_process  'Kalder behandlingssekvensen
+	Else
+
+	Exit Sub
+
+end if
+
+End sub
+
+'**********************************************************************************************''
+Sub ZZ_process 'Alle "zz"-anlæg
+
+'Dim i, n, w, p, q, n_col, n_colUlige as Integer 			'w=tæller poster pr. anlæg; N_colUlige: Skal gribe fat i den rigtige post i den "ulige" tabel; n+i+p er til loop-kontrol
+Dim w, q, n_col, n_colUlige as Integer 			'w=tæller poster pr. anlæg; N_colUlige: Skal gribe fat i den rigtige post i den "ulige" tabel; n+i+p er til loop-kontrol
+Dim xE, yE,xU, yU, u As String
+Dim xyE, xyU, z as String 									'z=punktkode m.m. til *.mid
+Dim FeltCol, FeltBrush, zzCol, zzBrush, zzColStip, zzBrushStip as String 			'Farver og brush til de enkelte anlæg
+
+FeltCol="Pen (1,15,16711680)"
+FeltBrush="Brush (0,16777215)"
+zzCol="Pen (1,2,0)"
+zzBrush="Brush(0,16777215)"
+
+q=FirstPassCount2.col2 'Antal anlæg pr. tab-post
+u=FirstPassCount2.col1 'Navn på det enkelte anlæg
+
+'***PHM: Tilføjede tabelnavn ifm ROWID kolonne i Where udtryk
+Select * from FirstPass2, FirstPassCount2 where FirstPass2.col5=FirstPassCount2.Col1 and FirstPass2.rowid mod 2=0 into PnrEven		'lige og ulige punktnumre opdelse ->lige pkt_nr
+Select * from FirstPass2, FirstPassCount2 where firstPass2.col5=FirstPassCount2.Col1 and FirstPass2.rowid mod 2=1 into PnrUneven 		'lige og ulige punktnumre opdelse ->ulige pkt_nr
+Commit Table PnrEven As p_name+"PnrEven" Open Table p_name+"PnrEven.tab"
+Commit Table PnrUnEven As p_name+"PnrUnEven" Open Table p_name+"PnrUnEven.tab"
+
+
+Fetch first from FirstPassCount2
+
+	Do Until EOT(FirstPassCount2)
+
+	z=""""+FirstPassCount2.col3+""""+","+""""""		'Oplysninger til MID-filen
+	print #2, z
+
+	q=FirstPassCount2.col2 							'Antal anlæg pr. tab-post
+	u=FirstPassCount2.col1 							'Navn på det enkelte anlæg
+
+	Select * from PnrEven where PnrEven.col5=u into selection101 		'behandler de lige numre
+
+		Fetch first from Selection 		'ordner de lige numre og lægger dem i *mif-dokumentet -> vælger første post
+
+		xE=selection101.col1
+		yE=selection101.col2
+		w=FirstPassCount2.col2
+		xyE=xE+" "+yE
+
+		Print #1, "Region 1"
+		Print #1, w
+		print #1, xyE
+
+			Fetch next from selection101	'-> vælger de næste poster
+
+				Do Until EOT(selection101)
+
+				xE=selection101.col1
+				yE=selection101.col2
+				w=FirstPassCount2.col2
+				xyE=xE+" "+yE
+
+				print #1, xyE
+
+				Fetch next from selection101
+
+				Loop
+
+
+	Select * from PnrUneven where PnrUneven.col5=u into Selection102 order by col4 desc		'behamdler de ulige numre
+
+	Fetch first from Selection102		'ordner de ulige numre og lægger dem i *mif-dokumentet -> vælger første post
+
+		Do Until EOT(selection102)
+
+		xE=selection102.col1
+		yE=selection102.col2
+		w=FirstPassCount2.col2
+		xyE=xE+" "+yE
+
+		print #1, xyE
+
+			Fetch next from selection102
+
+			xE=selection102.col1
+			yE=selection102.col2
+			w=FirstPassCount2.col2
+			xyE=xE+" "+yE
+
+			print #1, xyE
+
+			Fetch next from selection102
+
+		Loop
+
+		If z Like "%zz%" Then
+			print #1, 	zzCol
+			print #1, zzBrush
+			Else
+			print #1, FeltCol
+			print #1, FeltBrush
+		End If
+
+	Fetch Next from FirstPassCount2
+
+	Loop
+
+End Sub
+
+'Behandler alle logisk opmålte regionobjekter
+'**********************************************************************************************''
+Sub Region_Selection		'Alle polygon-objekter der er målt logisk. Finder i det følgende ud af, hvor mange SecondPass-punkter der findes i alt OG hvor mange punkter de enkelte SecondPass-anlæg indeholder
+Dim n as Integer
+
+Select * from Maaledata where col5 like "-Felt2%" or col5 like "-Fyldskifte%" or col5 like "-Lag%" or col5 like "-profil%" or col5 like "-sten%" or col5 like "-vand%" or col5 Like "-anlg%" or col5 Like "-Feltud%" or col5 not Like "-%" and col5 not Like "F1%" and col5 not Like "F2%" and col5 not Like "3%" and col5 not Like "F4%" and col5 not Like "F5%" and col5 not Like "F6%" and col5 not Like "F7%" and col5 not Like "F8%" and col5 not Like "F9%" and col5 not like "-Kote" into RegionSecondPass 'or Col5 Like "F2 %"
+Commit Table RegionSecondPass As p_name+"RegionSecondPass.tab"
+	If Fileexists(p_name+"RegionSecondPass.tab") Then
+	Open Table p_name+"RegionSecondPass.tab"
+
+	Select col5, col7, col6, Count(*) from RegionSecondPass group by col5 into Sel_Anlg
+	Commit Table sel_Anlg As P_name+"RegionSecondPassCount.tab"
+	Open table p_name+"RegionSecondPassCount.tab"
+
+	'Finder, gemmer og sletter obj med for få antal målte punkter
+	Select * from RegionSecondPassCount Where col2<2 into Sel_Fejl_region
+
+		If Tableinfo(Sel_Fejl_region, tab_info_nrows)<>0 Then
+		Delete from selection
+		Commit Table RegionSecondPassCount
+		Pack Table RegionSecondPassCount Data
+	End If
+
+	Call Region_process
+	Else
+
+	Exit Sub
+
+End If
+
+End Sub
+
+'**********************************************************************************************''
+Sub Region_process
+
+Dim i, w, p as Integer 'w=tæller poster pr. anlæg; "p" er line style-definitioner: fuld el. stiplet
+Dim x, y, n As String		'De enkelte sæt af x og y fra opmålingsfilen
+Dim xy, z as String 'z=punktkode m.m. til *.mid
+Dim Stiplet, AnlægCol, AnlægColStip, AnlægBrush, StenCol, StenColStip, StenBrush,VandCol, VandColStip, vandBrush, FeltCol, FeltBrush, FyldskifteCol, FyldskifteColStip, FyldskifteBrush, LagCol, LagColStip, LagBrush  As String 			'Farver og stil til de enkelte anlæg
+
+AnlægCol="Pen (1,2,0)"
+AnlægColStip="Pen (1,9,0)"
+AnlægBrush="Brush(0,16777215)"
+StenCol="Pen (1,2,0)"
+StenColStip="Pen (1,9,0)"
+StenBrush="Brush (2,12632256,0)"
+VandCol="Pen (1,1,0)"
+vandBrush= "Brush (8,10535167)"
+FeltCol="Pen (1,15,16711680)"
+FeltBrush="Brush (0,16777215)"
+FyldskifteCol="Pen (1,2,0)"
+FyldskifteBrush="Brush(0,16777215)"
+LagCol="Pen (1,2,65535)"
+LagBrush="Brush (1,0,16777215)"
+
+i=1
+
+
+Fetch first from RegionSecondPassCount
+
+	Do Until EOT (RegionSecondPassCount)
+
+n=RegionSecondPassCount.col1
+
+z=""""+RegionSecondPassCount.col3+""""+","+""""""+""
+
+x=RegionSecondPassCount.col1
+y=RegionSecondPassCount.col2
+xy=x+" "+y
+w=RegionSecondPassCount.col2
+
+If w=2 Then 'Tager højde for cirkulære anlæg -> laver dem til linier som en start -> giver diameter til senere cirkel-buffer-dannelse
+	Print #1, "Line" 'Laver den til et linieobj, der senere kan ændres til en (cirkulær) region
+	Print #2, z
+
+Else
+
+	Print #1, "Region 1"
+	Print #1, w
+
+	Print #2, z
+
+End If
+
+Select * from RegionSecondPass Where RegionSecondPass.col5=n into Selection100
+
+Fetch first from Selection100
+
+
+	Do Until EOT (Selection100)
+
+x=Selection.col1
+y=Selection.col2
+xy=x+" "+y
+
+		print #1, xy
+
+	Fetch Next from Selection100
+i=i+1
+	Loop
+
+If n Like "-anlg%" and w=2 Then
+		print #1, 	AnlægCol
+
+	Elseif n Like "-Anlg"+"%*%" Then
+		print #1, AnlægColStip
+
+	Elseif n Like "-anlg%" Then
+		print #1, 	AnlægCol
+		print #1, AnlægBrush
+
+	ElseIf n Like "%-sten%" and w=2 Then
+		print #1, 	StenCol
+
+	Elseif n Like "%-sten%" Then
+		print #1, StenCol
+		print #1, StenBrush
+
+	Elseif n Like "%vand%" and w=2 Then
+		print #1, VandCol
+
+	Elseif n Like "%vand%" Then
+		print #1, VandCol
+		print #1, VandBrush
+
+	Elseif n Like "%Felt2%" and w=2 Then
+		print #1, FeltCol
+
+	Elseif n Like "%Felt2%" Then
+		print #1, FeltCol
+		print #1, FeltBrush
+
+	Elseif n Like "%Feltud%" and w=2 Then
+		print #1, FeltCol
+
+	Elseif n Like "%Feltud%" Then
+		print #1, FeltCol
+		print #1, FeltBrush
+
+	Elseif n Like "%Fyldskifte%" and w=2 Then
+		print #1, VandCol
+
+	Elseif n Like "%Fyldskifte%"+"%*%" Then
+		print #1, AnlægColStip
+
+	Elseif n Like "%Fyldskifte%" Then
+		print #1, FyldskifteCol
+		print #1, FyldskifteBrush
+
+	Elseif n Like "%Lag%" and w=2 Then
+		print #1, VandCol
+	Elseif n Like "%Lag%"+"%*%" Then
+		print #1, AnlægColStip
+
+	Elseif n Like "%Lag%" Then
+		print #1, FyldskifteCol
+		print #1, FyldskifteBrush
+
+	Elseif n Like "%-profil%" and w=2 Then
+		print #1, FyldskifteCol
+
+	Elseif n Like "%-profil%"+"%*%" Then
+		print #1, AnlægColStip
+
+	Elseif n Like "%-profil%" Then
+		print #1, FyldskifteCol
+		print #1, FyldskifteBrush
+
+	ElseIf n Like "%F2%" and w=2 Then
+		print #1, 	FeltCol
+
+	Elseif n Like "%F2%" Then
+		print #1, 	FeltCol
+		print #1, FeltBrush
+
+	Elseif n Not Like "-%" and W=2 Then
+		print #1, AnlægCol
+
+	Elseif n Not Like "-%" And n Like "%*%" Then
+		print #1, AnlægColStip
+
+	Elseif n Not Like "-%" Then
+		print #1, AnlægCol
+		print #1, AnlægBrush
+	End if
+
+Fetch Next from RegionSecondPassCount
+
+Loop
+
+End Sub
+
+'Behandler alle punkter
+'**********************************************************************************************''
+Sub Point_Selection  'Som oven over - blot punkter..
+
+Select * from Maaledata where col5 like "-Fund%" or _col5 like "-maale%" or _col5 like "-proeve%" or _col5 like "-kote%" or _col5 Like "M%" and col7=1 or _col5 Like "P%" and col7=1 or _col5 Like "X%" and col7=1 into PointSecondPass
+
+Commit Table PointSecondPass As p_name+"PointSecondPass.tab"
+
+If Fileexists(p_name+"PointSecondPass.tab") Then
+
+	Call Point_process
+
+	Else
+
+	Exit Sub
+
+End If
+
+End Sub
+
+'**********************************************************************************************''
+Sub Point_process
+Dim i, w, n as Integer 'w=tæller poster pr. anlæg
+Dim x, y,x1, y1, xy1 As String
+Dim xy, z1, z2 as String 'z1=punktkode m.m. til *.mid; z2=kote til kotepunkter
+Dim BundkoteSymb, FundSymb,KoteSymb,MålepunktSymb, PrøveSymb As String 			'Farver og stil til de enkelte punkter
+
+BundkoteSymb="Symbol(68,8388608,12,""Symbol"",0,0)"
+FundSymb="Symbol (42,0,14,""Symbol"",0,0)"
+KoteSymb="Symbol(68,8388608,12,""Symbol"",0,0)"
+MålepunktSymb="Symbol (197,32768,12,""Symbol"",0,0)"
+PrøveSymb="Symbol (196,255,12,""Symbol"",0,0)"
+x="maaledata.col1"
+y="maaledata.col2"
+xy=x+" "+y
+n_col=TableInfo("PointSecondPass",Tab_Info_nrows)
+
+
+	Fetch first from PointSecondPass
+
+		Do Until EOT (PointSecondPass)
+		z1=""""+PointSecondPass.col6+""""+","+""""""
+		z2=""""+PointSecondPass.col6+""""+","+PointSecondPass.col3+""
+
+		If PointSecondPass.col6 like "-Kote%" Then
+		Print #2, z2
+		Else
+		Print #2, z1
+		End If
+
+		x=PointSecondPass.col1
+		y=PointSecondPass.col2
+		xy=x+" "+y
+
+		Print #1, "Point"
+		print #1, xy
+
+		If PointSecondPass.col6 Like "-Fund%" Then
+			print #1, 	FundSymb
+		End If
+
+		If PointSecondPass.col6 Like "X%" Then
+			print #1, 	FundSymb
+		End If
+
+		If PointSecondPass.col6 Like "-Kote%" Then
+			print #1, KoteSymb
+		End If
+
+		If PointSecondPass.col6 Like "%Maale%" Then
+			print #1, MålepunktSymb
+		End If
+
+		If PointSecondPass.col6 Like "M%" Then
+			print #1, MålepunktSymb
+		End If
+
+		If PointSecondPass.col6 Like "-Proeve%" Then
+			print #1, PrøveSymb
+		End if
+
+		If PointSecondPass.col6 Like "P%" Then
+			print #1, PrøveSymb
+		End if
+
+		If PointSecondPass.col6 Like "%Bund%" Then
+			print #1, KoteSymb
+		End if
+
+	Fetch Next From PointSecondPass
+
+	Loop
+
+End Sub
+
+'Behandler alle indmålte punkter, som skal forbindes med linier
+'**********************************************************************************************''
+Sub Line_Selection		'Som oven over - blot linier..
+
+Select * from maaledata where col6 like "%Niveau%" or col6 like "%snit%" into LineSecondPass
+Commit Table LineSecondPass As p_name+"LineSecondPass.tab"
+If fileexists(p_name+"LineSecondPass.tab") Then
+
+Select col5, col7, col6 from maaledata where maaledata.col5 like "%Niveau%" or maaledata.col5 like "%snit%" Group by col5 into sel_line
+Commit Table sel_line As P_name+"LineSecondPassCount.tab"
+Open table p_name+"LineSecondPassCount.tab"
+
+'Finder, gemmer og sletter obj med for få antal målte punkter
+Select * from LineSecondPassCount Where col2<2 into Sel_Fejl_line
+
+If Tableinfo(Sel_Fejl_line, tab_info_nrows)<>0 Then
+
+	Commit Table Sel_Fejl_line As p_name+"Fejl_line.tab"
+	Select * from LineSecondPassCount Where col2<2
+	Delete from selection
+	Commit Table LineSecondPassCount
+	Pack Table LineSecondPassCount Data
+End If
+
+Call Line_process
+
+Else
+
+Exit Sub
+
+End If
+
+End Sub
+
+'**********************************************************************************************''
+Sub Line_process
+
+Dim i, w, e as Integer 'w=tæller poster pr. anlæg
+Dim x, y,x1, y1, xy1, n As String
+Dim xy, z as String 'z=punktkode m.m. til *.mid
+Dim NiveauLine,SnitLine As String 			'Farver til de enkelte anlæg
+
+NiveauLine=" Pen (1,6,255)"
+SnitLine ="Pen (1,2,40960)"
+
+i=1
+
+'n_col=TableInfo("LineSecondPass",Tab_Info_nrows)
+
+	Fetch first from LineSecondPassCount
+
+		Do Until EOT (LineSecondPassCount)
+
+		z=""""+LineSecondPassCount.col3+""""+","+""""""
+		Print #2, z
+		n=LineSecondPassCount.col1
+		x=LineSecondPassCount.col1
+		y=LineSecondPassCount.col2
+		xy=x+" "+y
+		w=LineSecondPassCount.col2
+
+		Print #1, "Pline"
+		Print #1, w
+
+		Select * from LineSecondPass Where LineSecondPass.Col5=n into sel_Line
+
+			Fetch First from sel_Line
+				Do Until EOT (sel_Line)
+				x=sel_Line.col1
+				y=sel_Line.col2
+				xy=x+" "+y
+
+				print #1, xy
+
+		Fetch Next From sel_Line
+
+	Loop
+
+	If LineSecondPassCount.col1 Like "%Niveau%" Then
+		print #1, 	niveauLine
+	End If
+
+	If LineSecondPassCount.col1 Like "%Snit%" Then
+		print #1, SnitLine
+	End if
+
+		Fetch Next From LineSecondPassCount
+
+	Loop
+
+End Sub
+
+'Danner kotelag
+'**********************************************************************************************''
+Sub Kote_Selection
+	Select * from maaledata Into KoteSecondPass
+	Select col5, Count(*) from maaledata Into KoteSecondPassCount
+
+	Call Kote_process
+End Sub
+
+'**********************************************************************************************''
+Sub Kote_process'danner et punkt for hvert eneste målte punkt inkl. ukendte koder osv.
+	Dim i, w, n as Integer 			'w=tæller poster pr. anlæg
+Dim x, y,x1, y1, xy1 As String
+Dim xy, z1, z2 as String 			'z1=punktkode m.m. til *.mid; z2=kote til kotepunkter
+Dim KoteSymb As String 				'Farver og stil til kote-punkter
+
+KoteSymb="Symbol(68,8388608,12,""Symbol"",0,0)"
+x="maaledata.col1"
+y="maaledata.col2"
+xy=x+" "+y
+n_col=TableInfo("KoteSecondPass",Tab_Info_nrows)
+
+	Fetch first from KoteSecondPass
+		z1=""""+KoteSecondPass.col6+""""+","+""""""		'Bruges ikke her, da denne punktfil skal indeholde koteoplysninger
+		z2=""""+KoteSecondPass.col3+""""+","+""""""+","+""+KoteSecondPass.col6+""
+
+		Print #6, z2
+
+		x=KoteSecondPass.col1
+		y=KoteSecondPass.col2
+		xy=x+" "+y
+
+		Print #5, "Point"
+		print #5, xy
+		print #5, KoteSymb
+
+		n=1
+
+		Do until EOT(KoteSecondPass)
+
+		if n>=n_col Then
+			Exit Sub
+		End if
+
+		n=n+1
+
+		Fetch next from KoteSecondPass
+		z1=""+KoteSecondPass.col6+""+","+""""
+		z2=""+KoteSecondPass.col3+""+","+""""""+","+""+KoteSecondPass.col6+""
+
+		Print #6, z2
+
+		x=KoteSecondPass.col1
+		y=KoteSecondPass.col2
+		xy=x+" "+y
+
+		Print #5, "Point"
+		print #5, xy
+
+		print #5, 	KoteSymb
+
+	loop
+
+End Sub
+
+
+'Importere mif/mid-filen
+
+'**********************************************************************************************''
+Sub ImportMIFMID
+
+	Close File #1
+	Close File #2
+	Close File #5
+	Close File #6
+
+	Print "Import MIF: " & p_name + "maaledata.mif"
+	Import p_name+"maaledata.mif"
+		Type "MIF"
+		Into p_name + "maaledata_temp.tab"
+
+	Print "Open Table: " & p_name + "maaledata_temp.tab"
+	Open Table p_name+"maaledata_temp.tab"
+	Set Table maaledata_temp FastEdit On
+
+	commit table maaledata_temp As p_name+"maaledata_temp_fejl.tab" 'til søgning efter stavefejl i ArkDigi-koden og forkert antal målte punkter
+
+	'Behandler evt. noter og flytter dem til "Note"-kolonnen
+
+	Update maaledata_temp set col2=col1
+	Select *from maaledata_temp where col2 not like "%.%" into SelectionDot
+	Update selectionDot set col2 = ""
+
+	Select * from maaledata_temp where Anl_gsangivelse Like "%.%" into selectionNote 'Sletter alt på hhv. højre og venstre side af "." i hhv. col1 og col2
+
+	Update SelectionNote Set col1=Left$(col1,InStr(1,col1,".")-1)
+
+	Update SelectionNote Set col2=RTrim$(LTrim$(Mid$(col2,InStr(1,col2,".")+1,150)))
+
+	Commit Table maaledata_temp
+
+'	Alter table "maaledata_temp" (modify Anl_gsangivelse Char(15)) Interactive 'Tilpasser kolonnelængden fra 65 til 15 tegn jf. specifikationerne
+'
+'	Commit table maaledata_temp
+
+	Alter Table "maaledata_temp" (drop Opm_lingsinfo)
+
+	Commit Table maaledata_temp
+
+	Import p_name+"Kote.mif"
+		Type "MIF"
+		Into p_name+"kote_trans.tab"
+
+	'Fejlsøger øjebkikkeligt for misforhold mellem kodetyper og antal målte punkter.
+	'Data fra tabellem "Fejl_sel" overføres senere til "Fejl.tab".
+	'Selve " maaledata_temp_fej" blev dannet lige efter MIF-import (ca. ln.1060)...
+	Open table p_name+"maaledata_temp_fejl.tab"
+	If Tableinfo(maaledata_temp_fejl,tab_info_nrows) <> 0 then
+	Select * from kote_trans where col3 not in (select col1 from maaledata_temp_fejl) and col3 not like "-Bundkote%" into Fejl_sel'Da koden "-Bundkote" lægges i kote-tabellen, vil den ikke figurere andre steder, og vil fremgå som en fejl, hvis der ikke tages højde herfor..
+	commit table Fejl_sel as p_name+"Fejl_sel.tab"
+	Drop table maaledata_temp_fejl
+	End If
+
+	Call LineToCir
+
+End Sub
+
+'**********************************************************************************************''
+Sub LineToCir 'Laver linieobejkterne (de anlæg fra MIF/MID, der kun består af to punkter) til cirkulære objekter
+
+	Alter Table maaledata_temp 'ændre kolonnenavn
+	(Rename Anl_gsangivelse Anlægsangivelse)
+	Commit table maaledata_temp
+
+Select * from maaledata_temp where Str$(obj) = "Line" 'Udsøger linieobjeketer = de kommende cirkulære objekter
+
+If SelectionInfo(Sel_Info_Nrows)=0 Then
+	Commit Table maaledata_temp
+
+Call Dan_tab
+Exit Sub
+
+Else
+
+Dim MidLineX, MidLineY, Diameter as float		'Udskifter linieobjekter med et pkt i midt linie --> og danner buffer som "runde" anlæg med korrekt stilart og diameter (=1/2 "line"-længde)
+Dim i as Integer
+i=1 'til loop-kontrol
+Set coordsys table maaledata_temp
+Select * from maaledata_temp where Str$(obj) = "Line" into sel_LineToBuffer
+
+Fetch first from sel_LineToBuffer
+
+Do Until EOT (sel_LineToBuffer)
+
+
+If sel_LineToBuffer.Anlægsangivelse like "%Felt%" or sel_LineToBuffer.Anlægsangivelse Like "F2%" Then
+	Set Style Pen MakePen(1,15,16711680)
+	Set Style Brush MakeBrush(1, 0, -1)
+
+Elseif	sel_LineToBuffer.Anlægsangivelse Like "%Vand%" Then
+	Set Style Pen MakePen(1,1,255)
+	Set Style Brush MakeBrush(57,255,16777215)
+
+ElseIf sel_LineToBuffer.Anlægsangivelse like "%Sten%" Then
+	Set Style Pen MakePen(1,2,0)
+	Set Style Brush MakeBrush(2,12632256,-1)
+
+Elseif sel_LineToBuffer.Anlægsangivelse Like "%*%" Then
+	Set Style Pen MakePen(1,9,0)
+	Set Style Brush MakeBrush(1,16777215,-1)
+
+Else
+	Set Style Pen MakePen(1,2,0)
+	Set Style Brush MakeBrush(1,16777215,-1)
+End If
+
+MidLineX=CentroidX(sel_LineToBuffer.obj)
+MidLineY=CentroidY(sel_LineToBuffer.obj)
+Diameter=ObjectLen(sel_LineToBuffer.obj,"km")/2	'Radius= ½ linielængde
+	Update sel_LineToBuffer
+	set obj = CreatePoint(MidLineX,MidLineY) where rowid=i
+	Update sel_LineToBuffer
+	set obj=Buffer (obj,80,Diameter,"km") where rowid=i
+i=i+1
+	Fetch next from sel_LineToBuffer
+
+Loop
+
+End If
+
+Commit Table maaledata_temp
+
+Call Dan_tab
+
+End Sub
+
+'**********************************************************************************************''
+Sub Dan_tab
+
+Dim r as Integer
+
+'Div. endelige tabeller dannes og tilrettes med udgangspunkt i maaledata_temp.tab
+
+Select * from maaledata_temp where Anlægsangivelse like "%-Fyldskifte%" or Anlægsangivelse like "%-profil%" or Anlægsangivelse like "%-sten%" or Anlægsangivelse like "%-vand%" or Anlægsangivelse Like "-anlg%" or Anlægsangivelse Like "%zz%" or Anlægsangivelse Not Like "%-%" and Str$(obj)="region" Into Anlg_trans   'Undersøger om der findes anlæg
+
+Commit Table Anlg_trans As p_name+"Anlæg_trans.tab"
+Open Table p_name+"Anlæg_trans.tab"
+
+
+If Tableinfo("Anlæg_trans",Tab_Info_Nrows) < 1 Then Drop Table Anlæg_trans	'Sletter alle tabeller der ikke indeholder objekter
+		Else
+		Select * from Anlæg_trans where Anlægsangivelse like "F1%" or Anlægsangivelse like "F2%"  or Anlægsangivelse Like "F3%" or Anlægsangivelse Like "F4%" or Anlægsangivelse Like "F5%" or Anlægsangivelse Like "F6%" or Anlægsangivelse Like "F7%" or Anlægsangivelse Like "F8%" or Anlægsangivelse Like "F9%" or Anlægsangivelse like "-Felt%" into sel_felt 'sletter uønskede elementer fra anlægs-tabellen
+	If TableInfo (sel_felt, Tab_info_nrows) > 0 Then
+		delete from sel_felt
+		Commit table Anlæg_trans
+
+	End If
+	'opdatere notefeltet med "sten" hvor opmåling er sten
+		Select * from Anlæg_trans where Anlægsangivelse Like "-Sten%" into Sel_sten
+	If Tableinfo("Sel_sten",Tab_Info_nrows) Then
+		Update Sel_sten set col2 = "Sten"
+		Commit table Anlæg_trans
+	End If
+	'Retter kolonner til
+		Select * from Anlæg_trans Where Anlægsangivelse Like "-%" into Selection1
+		Update Selection1 set Anlægsangivelse = Mid$(Anlægsangivelse, InStr(1,Anlægsangivelse," "),150 )
+		Update Anlæg_trans Set Anlægsangivelse = RTrim$(LTrim$(Anlægsangivelse))
+		commit table Anlæg_trans
+		dim col_navn as string 'bruges til at tilpasse 1'ste kolonne i tabellen til Char(15)
+		col_navn=ColumnInfo(Anlæg_trans,"col1",COL_INFO_NAME)
+		Alter table Anlæg_trans (modify col_navn Char(15))
+		Commit Table Anlæg_trans
+		Pack Table Anlæg_trans Data
+End If
+
+'----------------------------------
+Select * from Maaledata_temp where Anlægsangivelse Like "-Felt%" or Anlægsangivelse Like "F1%" or Anlægsangivelse Like "F2%" or Anlægsangivelse Like "F3%" or Anlægsangivelse Like "F4%" or Anlægsangivelse Like "F5%" or Anlægsangivelse Like "F6%" or Anlægsangivelse Like "F7%" or Anlægsangivelse Like "F8%" or Anlægsangivelse Like "F9%" and Str$(obj)= "region" Into Felt	'Undersøger om der findes Felter
+
+Commit Table Felt As p_name+"Felt_trans.tab"
+Open Table p_name+"Felt_trans.tab"
+
+
+If Tableinfo(Felt_trans,Tab_Info_Nrows) < 1 Then Drop Table Felt_trans	'Sletter tabellen, hvis den ikke indeholder objekter
+		Else
+		Alter table "Felt_trans" (rename Anlægsangivelse Feltangivelse)
+		Select * from Felt_trans where Feltangivelse like "%-Feltud%" into sel_feltud
+	If TableInfo ("sel_feltud", Tab_info_nrows) > 0 Then
+		delete from sel_feltud
+		Commit table Felt_trans
+	End If
+
+		Select * from Felt_trans Where Feltangivelse Like "-F%" into Selection2
+		Update Selection2 set Feltangivelse = Mid$(Feltangivelse, InStr(1,Feltangivelse," "),150 )
+		Update Felt_trans Set Feltangivelse = RTrim$(LTrim$(Feltangivelse))
+		Commit Table Felt_trans
+
+		Select * from Felt_trans Where Feltangivelse Like "F%" into Selection2
+		Update Selection2 set Feltangivelse = Mid$(Feltangivelse, InStr(1,Feltangivelse,"F")+1,150 )
+		Update Felt_trans Set Feltangivelse = RTrim$(LTrim$(Feltangivelse))
+		Commit Table Felt_trans
+		col_navn=ColumnInfo(Felt_trans,"col1",COL_INFO_NAME)
+		Alter table Felt_trans (modify col_navn Char(15))
+		Commit Table Felt_trans
+		Pack Table Felt_trans Data
+End If
+
+'-------------------------------
+	Select * from Maaledata_temp where Anlægsangivelse Like "-Feltud%" Into Felt_ud 'Undersøger om der findes Felt_ud
+	Commit Table Felt_ud As p_name+"Feltud_trans.tab"
+	Open Table p_name+"Feltud_trans.tab"
+
+	If Tableinfo("Feltud_trans",Tab_Info_Nrows) < 1 Then
+		Drop Table Feltud_trans 'Sletter tabellen, hvis den ikke indeholder objekter
+	End If
+
+'-------------------------------
+	Select * from Maaledata_temp where Anlægsangivelse Like "-Maale%" or Anlægsangivelse Like "M%" and Str$(obj) = "point" Into Maale 	'Undersøger om der findes målepunkter
+
+	Commit Table maale As p_name+"Målepunkter_trans.tab"
+	Open Table p_name+"Målepunkter_trans.tab"
+
+	If Tableinfo("Målepunkter_trans",Tab_Info_Nrows) < 1 Then
+		Drop Table Målepunkter_trans	'Sletter tabellen, hvis den ikke indeholder objekter
+	Else
+		Alter table "Målepunkter_trans" (Modify Note Char(100) rename Anlægsangivelse Angivelse, Note Beskrivelse)
+		Select * from Målepunkter_trans Where Angivelse Like "% %" into Selection2
+		Update Selection2 set Angivelse = Mid$(Angivelse, InStr(1,Angivelse," "),150 )
+		Update Målepunkter_trans Set Angivelse = RTrim$(LTrim$(Angivelse))
+		Commit Table Målepunkter_trans
+		col_navn=ColumnInfo(Målepunkter_trans,"col1",COL_INFO_NAME)
+		Alter table Målepunkter_trans (modify col_navn Char(15))
+		Commit Table Målepunkter_trans
+	End If
+
+'-----------------------------
+	Select * from Maaledata_temp where Anlægsangivelse Like "-Lag%" and Str$(obj) = "region" Into lag	'Undersøger om der findes lag
+
+	Commit Table lag As p_name+"Lag_trans.tab"
+	Open Table p_name+"Lag_trans.tab"
+
+If Tableinfo("Lag_trans",Tab_Info_Nrows) < 1 Then Drop Table Lag_trans	'Sletter tabellen, hvis den ikke indeholder objekter
+	Else
+	Alter table "Lag_trans" (rename Anlægsangivelse Angivelse, note Beskrivelse)
+	Update Lag_trans set Angivelse = Mid$(Angivelse, InStr(1,Angivelse," "),150)
+	Update Lag_trans Set Angivelse = Rtrim$(LTrim$(Angivelse))
+	Commit Table Lag_trans
+	col_navn=ColumnInfo(Lag_trans,"col1",COL_INFO_NAME)
+	Alter table Lag_trans (modify col_navn Char(15))
+	Commit Table Lag_trans
+End If
+
+'-----------------------------
+	Select * from Maaledata_temp where Anlægsangivelse Like "-snit%" or Anlægsangivelse Like "-Niveau%" into Snit 'Undersøger om der findes snit
+
+	Commit Table Snit As p_name+"Snit_trans.tab"
+	Open Table p_name+"Snit_trans.tab"
+
+If Tableinfo("Snit_trans",Tab_Info_Nrows) < 1 Then Drop Table Snit_trans	'Sletter tabellen, hvis den ikke indeholder objekter
+	Else
+		Update snit_trans set Anlægsangivelse = Mid$(Anlægsangivelse, InStr(1,Anlægsangivelse," "),150 )
+		Update snit_trans Set Anlægsangivelse = Rtrim$(LTrim$(Anlægsangivelse))
+		Commit Table Snit_trans
+		update snit_trans set Note = Anlægsangivelse
+		Commit Table Snit_trans
+		Alter table "Snit_trans" (drop Anlægsangivelse)
+		Commit Table Snit_trans
+		col_navn=ColumnInfo(Snit_trans,"col1",COL_INFO_NAME)
+		Alter table Snit_trans (modify col_navn Char(15))
+		Commit Table Snit_trans
+	End If
+
+'-----------------------------
+Select * from Maaledata_temp where Anlægsangivelse Like "-Fund%" or Anlægsangivelse Like "X%" and Str$(obj) = "point" Into Fund	'Undersøger om der findes fund
+
+	Commit Table Fund As p_name+"Fund_trans.tab"
+	Open Table p_name+"Fund_trans.tab"
+
+If Tableinfo("Fund_trans",Tab_Info_Nrows) < 1 Then Drop Table Fund_trans	'Sletter tabellen, hvis den ikke indeholder objekter
+	Else
+		Alter table "Fund_trans" (rename Anlægsangivelse Fundangivelse)
+		Select * from Fund_trans Where Fundangivelse Like "% %" into Selection2
+		Update Selection2 set Fundangivelse = Mid$(Fundangivelse, InStr(1,Fundangivelse," "),150 )
+		Update Fund_trans Set Fundangivelse = Rtrim$(LTRIM$(Fundangivelse))
+		Commit Table Fund_trans
+		col_navn=ColumnInfo(Fund_trans,"col1",COL_INFO_NAME)
+		Alter table Fund_trans (modify col_navn Char(15))
+		Commit Table Fund_trans
+End If
+
+'----------------------------
+	Select * from Maaledata_temp where Anlægsangivelse Like "-Bundkote%" and Str$(obj) = "point" Into Bundkote 'Undersøger om der findes bundkote
+
+	Commit Table Bundkote As p_name+"Bundkote_trans.tab"
+	Open Table p_name+"Bundkote_trans.tab"
+
+	If Tableinfo("Bundkote_trans",Tab_Info_Nrows) < 1 Then
+		Drop Table Bundkote_trans	'Sletter tabellen, hvis den ikke indeholder objekter
+	Else
+		Alter table "Bundkote_trans" (rename Anlægsangivelse Topkote, Note Bundkote modify Bundkote Decimal(8,3))
+		Commit Table Bundkote_trans
+	End If
+
+'------------------------------
+	Select * from Maaledata_temp where Anlægsangivelse Like "-Proeve%" or Anlægsangivelse Like "P%" and Str$(obj) = "point" Into Prøve 'Undersøger om der findes prøver
+
+	Commit Table Prøve As p_name+"Prøver_trans.tab"
+	Open Table p_name+"Prøver_trans.tab"
+
+	If Tableinfo("Prøver_trans",Tab_Info_Nrows) < 1 Then
+		Drop Table Prøver_trans	'Sletter tabellen, hvis den ikke indeholder objekter
+	Else
+		Alter table "Prøver_trans" (modify Note Char(100) rename Anlægsangivelse Angivelse rename Note Beskrivelse)
+		Select * from Prøver_trans Where Angivelse Like "% %" into Selection3
+		Update Selection3 set Angivelse = Mid$(Angivelse, InStr(1,Angivelse," "),150 )
+		Update Prøver_trans Set Angivelse = Rtrim$(LTRIM$(Angivelse))
+		Commit Table Prøver_trans
+		col_navn=ColumnInfo(Prøver_trans,"col1",COL_INFO_NAME)
+		Alter table Prøver_trans (modify col_navn Char(15))
+		Commit Table Prøver_trans
+	End If
+
+'---------------------------------
+	Create Table Fejl (Kode Char(100), Digitaliseringsfejl Char (100)) File p_name+"Fejl.tab"
+	Create Map For Fejl Using Maaledata_temp 'CoordSys Earth Projection 8, 115, "m", 9, 0, 0.9996, 500000, 0 Bounds (50000, 5750000) (1050000, 6750000)
+	Open Table p_name+"Fejl.tab"
+
+	Commit Table Fejl
+
+	Close All	'Lukker alle tabeller for at rydde op i temp-tabellerne og retter de færdige "_trans"-tabeller til
+
+	Open Table p_name+"kote_trans.tab"
+	Set coordsys table Kote_trans
+	Open Table p_name+"maaledata_temp.tab"
+
+	Open Table p_name+"kote_trans.tab"
+	Commit Table Kote_trans
+	'--------------------------------
+	'Kopierer bundkotedata til kote_trans og sletter bundkotetabellen
+	'If FileExists(p_name+"Bundkote_trans.tab") Then
+	'	Open Table p_name+"Bundkote_trans.tab"
+	'	Select * from kote_trans, Bundkote_trans where kote_trans.obj intersects Bundkote_trans.obj into Sel_bundkote
+	'	Update Sel_bundkote set col2=col1
+	'	Commit Table Kote_trans
+	'	Drop Table Bundkote_trans
+	'End If
+
+	Select * from kote_trans where col3 like "%-Bundkote%" into sel_bundkote
+	Update sel_bundkote set col2=col1
+	commit table kote_trans
+
+	If FileExists(p_name+"Fejl.tab") Then
+		Open Table p_name+"Fejl.tab" Interactive
+	End If
+
+	If FileExists(p_name+"Felt_trans.tab") Then
+		Open Table p_name+"Felt_trans.tab" Interactive
+		Commit Table Felt_trans
+
+		'Undersøger for div. fejl vedr. skæring/selvskæring i Felt-laget og lægger evt. fejl i fejl-tabellen --> se også "Videre fejlbehandling"
+		Objects Check From Felt_trans Into Table Fejl
+		Selfint Symbol (198,16711680,12,"Symbol",0,0)
+		Overlap Pen (4,2,16767072)
+	   	Brush (0,16777215)
+	End If
+
+
+	If FileExists(p_name+"Anlæg_trans.tab") Then
+		Open Table p_name+"Anlæg_trans.tab" Interactive
+		Commit Table Anlæg_trans
+
+		'Undersøger for div. fejl vedr. skæring/selvskæring i anlægs-laget og lægger evt. fejl i fejl-tabellen --> Se også "Videre fejlbehandling"
+		Objects Check From Anlæg_trans Into Table Fejl
+		Selfint Symbol (198,16711680,12,"Symbol",0,0)
+		Overlap Pen (4,2,16767072)
+	   	Brush (0,16777215)
+	End If
+
+	'Laver hul i "Felt_trans", hvis denne og "Feltud" findes OG skærer hinanden --> sletter derefter Feltud
+	If FileExists(p_name+"Felt_trans.tab") Then
+		Select * from Felt_trans
+	End If
+
+	If FileExists(p_name+"Feltud_trans.tab") Then
+		Open Table p_name+"Feltud_trans.tab"
+
+		Select * from Felt_trans
+		Set Target On
+		Select * from Feltud_trans
+		Objects Erase Into Target Data Feltangivelse=Feltangivelse
+		Commit table Felt_trans
+		Drop Table Feltud_trans
+		Pack Table Felt_trans Graphic Data
+	End If
+
+	If FileExists(p_name+"Målepunkter_trans.tab") Then
+		Open Table p_name+"Målepunkter_trans.tab" Interactive
+	End If
+
+	If FileExists(p_name+"Lag_trans.tab") Then
+		Open Table p_name+"Lag_trans.tab"
+	End If
+
+	If FileExists(p_name+"Snit_trans.tab") Then
+		Open Table p_name+"Snit_trans.tab" Interactive
+	End If
+
+	If FileExists(p_name+"Fund_trans.tab") Then
+		Open Table p_name+"Fund_trans.tab" Interactive
+	End If
+
+	If FileExists(p_name+"Niveau_trans.tab") Then
+		Open Table p_name+"Niveau_trans.tab" Interactive
+	End If
+
+	If FileExists(p_name+"Prøver_trans.tab") Then
+		Open Table p_name+"Prøver_trans.tab" Interactive
+	End If
+
+	If FileExists(p_name+"maaledata.tab") Then
+		Open Table p_name+"maaledata.tab" Interactive
+	End If
+
+	'Noterer i fejl-tabellen, hvilken fejl der er tale om
+	If FileExists(p_name+"fejl.tab") Then
+		Dim objType, iRow as Integer
+		Fetch First from Fejl
+		Do Until EOT(Fejl)
+			objType=ObjectInfo(fejl.obj, OBJ_INFO_TYPE)
+			iRow=Fejl.rowid
+
+			If objType=Obj_type_region Then Update Fejl Set Digitaliseringsfejl="Objekter overlapper" Where Rowid=iRow
+				Else Update Fejl Set Digitaliseringsfejl="Objekt skærer sig selv" Where Rowid=iRow
+			End If
+
+			Fetch next from Fejl
+		Loop
+		Commit table Fejl
+	End If
+
+	If FileExists(p_name+"Fejl_sel.tab") Then
+		Open Table p_name+"Fejl_sel.tab"
+		Insert into Fejl(col1)
+		Select col3 from Fejl_sel
+		Drop Table Fejl_sel
+	End If
+
+	Select * from Fejl where Digitaliseringsfejl = "" into fejl_faa_pkt
+	If Tableinfo(fejl_faa_pkt,Tab_info_nrows)<> 0 Then
+		Update fejl_faa_pkt set Digitaliseringsfejl="Ulovlig kode el. kode med forkert/for få antal målte punkter!"
+	End if
+
+	Commit Table Fejl
+
+	'Opdaterer til korrekt fejl-symbol
+	Select * from Fejl where Str$(ObjectInfo(obj,1)) = "5" into sel_fejlSymb
+	Set Style Symbol(198,16711680,12,"Symbol",0,0)
+	Update sel_fejlSymb set obj=Centroid(obj)
+
+	Commit Table Fejl
+
+	Call Clean_Up
+
+End Sub
+
+'**********************************************************************************************''
+Sub Clean_up				'Rydder op, retter kort til og sletter midlertidige og tomme tabeller/filer
+
+	Close All
+
+	Open Table p_name+"kote_trans.tab"
+	Map from Kote_trans
+
+	Open Table p_name+"maaledata_temp.tab"
+	Add Map Auto Layer maaledata_temp
+
+	If FileExists(p_name+"Felt_trans.tab") Then
+		Open Table p_name+"Felt_trans.tab" Interactive
+		Add Map Auto Layer Felt_trans
+		Commit Table Felt_trans
+	End If
+
+	If FileExists(p_name+"Anlæg_trans.tab") Then
+		Open Table p_name+"Anlæg_trans.tab" Interactive
+		Add Map Auto Layer Anlæg_trans
+	End If
+
+	If FileExists(p_name+"Målepunkter_trans.tab") Then
+		Open Table p_name+"Målepunkter_trans.tab" Interactive
+		Add Map Auto Layer Målepunkter_trans
+	End If
+
+	If FileExists(p_name+"Lag_trans.tab") Then
+		Open Table p_name+"Lag_trans.tab"
+		Add Map Auto Layer Lag_trans
+	End If
+
+	If FileExists(p_name+"Snit_trans.tab") Then
+		Open Table p_name+"Snit_trans.tab" Interactive
+		Add Map Auto Layer Snit_trans
+	End If
+
+	If FileExists(p_name+"Fund_trans.tab") Then
+		Open Table p_name+"Fund_trans.tab" Interactive
+		Add Map Auto Layer Fund_trans
+	End If
+
+	If FileExists(p_name+"Niveau_trans.tab") Then
+		Open Table p_name+"Niveau_trans.tab" Interactive
+		Add Map Auto Layer Niveau_trans
+	End If
+
+	If FileExists(p_name+"Bundkote_trans.tab") Then
+		Open Table p_name+"Bundkote_trans.tab"
+		Add Column "Kote_trans" (Bundkote) From "Bundkote_trans" Set to Bundkote where Intersects
+		Commit Table Kote_trans
+		Drop Table Bundkote_trans
+	End If
+
+	If FileExists(p_name+"Prøver_trans.tab") Then
+		Open Table p_name+"Prøver_trans.tab" Interactive
+		Add Map Auto Layer Prøver_trans
+	End If
+
+	If FileExists(p_name+"Fejl.tab") Then
+		Open Table p_name+"Fejl.tab" Interactive
+		Add Map Auto Layer Fejl
+	End If
+
+	Set Map layer Kote_trans display Off
+	Set Map Window FrontWindow() zoom Entire
+	'-------------------------------------------
+
+	Set Map Redraw On
+	Set Event Processing On
+
+	If TableInfo("Fejl",Tab_Info_Nrows) = 0 Then
+		Drop Table Fejl
+
+		Note "DIGITALISERING SUCCESFULDT GENNEMFØRT!"
+		Else
+		Note "DIGITALISERING SUCCESFULDT GENNEMFØRT!" + chr$(10) + chr$(10) +
+		"Der blev fundet fejl under digitaliseringen"+chr$(10)
+		+"                - se fejl-laget..              "
+	End If
+
+	'sletter koder hvis afvinklet i startmenuen
+	If Slet_anlg_num = "ja" and fileexists (p_name+"anlæg_trans.tab")Then
+		Update anlæg_trans set col1 = ""
+		Commit table Anlæg_trans
+	End If
+
+	If Slet_anlg_num = "ja" and Fileexists (p_name+"Felt_trans.tab")Then
+		Update Felt_trans set col1 = ""
+		Commit table Felt_trans
+	End If
+
+	If Slet_anlg_num = "ja" and Fileexists (p_name+"Fund_trans.tab")Then
+		Update Fund_trans set col1 = ""
+		Commit table Fund_trans
+	End If
+
+	'Undersøger for ønske om ændring af anlægsfarve til blå
+	If Ny_Anlg_Blaa = "ja" and fileexists (p_name+"anlæg_trans.tab") Then 'Anlæg_trans.tab
+		Dim Pen_Blaa As Pen
+		Dim Sel_rNum As Integer
+		Dim Sel_obj as Object
+
+		Pen_Blaa = MakePen(1,2,Blue)
+
+		Fetch first from Anlæg_trans
+		Do Until EOT(Anlæg_trans)
+			Sel_Obj = Anlæg_trans.obj
+			Sel_rNum = Anlæg_trans.rowid
+
+			Alter Object Sel_Obj
+				Info OBJ_INFO_PEN, Pen_Blaa
+
+			Update Anlæg_trans
+				Set OBJ = Sel_obj
+				wHERE Rowid = Sel_rNum
+
+			Fetch Next from Anlæg_trans
+		Loop
+
+		Commit table Anlæg_trans
+	End if
+
+	If Ny_Anlg_Blaa = "ja" and fileexists (p_name+"Lag_trans.tab") Then 'Lag_trans.tab
+		print "ja"
+		Dim Pen_Blaa2 As Pen
+		Dim Sel_rNum2 As Integer
+		Dim Sel_obj2 as Object
+
+		Pen_Blaa2 = MakePen(1,2,Blue)
+
+		Fetch first from Lag_trans
+		Do Until EOT(Lag_trans)
+			Sel_Obj = Lag_trans.obj
+			Sel_rNum = Lag_trans.rowid
+
+			Alter Object Sel_Obj
+				Info OBJ_INFO_PEN, Pen_Blaa2
+
+			Update Lag_trans
+				Set OBJ = Sel_obj
+				wHERE Rowid = Sel_rNum
+
+			Fetch Next from Lag_trans
+		Loop
+
+		Commit table Lag_trans
+End If
+
+End Sub
+
+
+'**********************************************************************************************''
+Sub EndHandlerMD
+
+	If fileexists (p_name+"maaledata.tab") Then
+		Open table p_name+"maaledata.tab"
+		Drop Table maaledata
+	End If
+
+	If Fileexists(p_name+"Sel_felt.tab") Then
+		Open Table p_name+"Sel_Felt"
+	Drop Table Sel_felt
+	End If
+
+	If Fileexists(p_name+"Sel_anlg.tab") Then
+		Open Table p_name+"Sel_anlg"
+	Drop Table Sel_anlg
+	End If
+
+	If Fileexists(p_name+"Sel_fund.tab") Then
+		Open Table p_name+"Sel_fund"
+	Drop Table Sel_fund
+	End If
+
+	If Fileexists(p_name+"Sel_maale.tab") Then
+		Open Table p_name+"Sel_maale"
+	Drop Table Sel_maale
+	End If
+
+	If Fileexists(p_name+"Sel_bund.tab") Then
+		Open Table p_name+"Sel_bund.tab"
+	Drop Table Sel_bund
+	End If
+
+	If Fileexists(p_name+"Sel_fyld.tab") Then
+		Open Table p_name+"Sel_fyld.tab"
+	Drop Table Sel_Fyld
+	End If
+
+	If Fileexists(p_name+"Sel_Niv.tab") Then
+		Open Table p_name+"Sel_Niv.tab"
+	Drop Table Sel_Niv
+	End If
+
+	If Fileexists(p_name+"Sel_snit.tab") Then
+		Open Table p_name+"Sel_snit.tab"
+	Drop Table Sel_snit
+	End If
+
+	If Fileexists(p_name+"Sel_lag.tab") Then
+		Open Table p_name+"Sel_lag.tab"
+	Drop Table Sel_lag
+	End If
+
+	If FileExists(p_name+"maaledata_temp.tab") Then
+		Open Table p_name+"maaledata_temp"
+		Drop Table maaledata_temp
+	End If
+
+	If FileExists(p_name+"PointSecondPass.tab") Then
+		Open Table p_name+"PointSecondPass.tab"
+		Drop Table PointSecondPass
+	End If
+
+	If FileExists(p_name+"Fejl_sel") Then
+		Open table p_name+"Fejl_sel.tab"
+		Drop table Fejl_sel
+	End If
+
+	If FileExists(p_name+"FirstPassSelEven.tab") Then
+		Kill p_name+"FirstPassSelEven.tab"
+		Kill p_name+"FirstPassSelEven.dat"
+		Kill p_name+"FirstPassSelEven.ind"
+	End If
+
+	If FileExists(p_name+"FirstPassSelUnEven.tab") Then
+		Kill p_name+"FirstPassSelUnEven.TAB"
+		Kill p_name+"FirstPassSelUnEven.DAT"
+		Kill p_name+"FirstPassSelUnEven.IND"
+	End If
+
+	If FileExists(p_name+"FirstPassCount2.tab") Then
+		Kill p_name+"FirstPassCount2.TAB"
+		Kill p_name+"FirstPassCount2.DAT"
+		Kill p_name+"FirstPassCount2.IND"
+	End If
+
+	If FileExists(p_name+"FirstPass2.tab") Then
+		Kill p_name+"FirstPass2.TAB"
+		Kill p_name+"FirstPass2.DAT"
+	End If
+
+	If FileExists(p_name+"FirstPass.tab") Then
+		Kill p_name+"FirstPass.TAB"
+		Kill p_name+"FirstPass.DAT"
+	End If
+
+	If FileExists(p_name+"PnrEven.tab") Then
+		Kill p_name+"PnrEven.TAB"
+		Kill p_name+"PnrEven.DAT"
+		Kill p_name+"PnrEven.IND"
+	End If
+
+	If FileExists(p_name+"PnrUnEven.tab") Then
+		Kill p_name+"PnrUnEven.TAB"
+		Kill p_name+"PnrUnEven.DAT"
+		Kill p_name+"PnrUnEven.IND"
+	End If
+
+	If FileExists(p_name+"IndexTab1.tab") Then
+		Kill p_name+"IndexTab1.tab"
+		Kill p_name+"IndexTab1.Dat"
+		Kill p_name+"IndexTab1.IND"
+	End If
+
+	If FileExists(p_name+"maaledataTXT.tab") Then
+		Kill p_name+"maaledataTXT.txt"
+		Kill p_name+"maaledataTXT.tab"
+	End If
+
+	If FileExists(p_name+"RegionSecondPass.tab") Then
+		Kill p_name+"RegionSecondPass.dat"
+		Kill p_name+"RegionSecondPass.tab"
+	End If
+
+	If FileExists(p_name+"RegionSecondPassCount.tab") Then
+		Kill p_name+"RegionSecondPassCount.dat"
+		Kill p_name+"RegionSecondPassCount.tab"
+	End If
+
+	If FileExists(p_name+"LineSecondPass.tab") Then
+		Kill p_name+"LineSecondPass.dat"
+		Kill p_name+"LineSecondPass.tab"
+	End If
+
+	If FileExists(p_name+"LineSecondPassCount.tab") Then
+		Kill p_name+"LineSecondPassCount.dat"
+		Kill p_name+"LineSecondPassCount.tab"
+	End If
+
+	If FileExists(p_name+"Kote.mif") Then
+		Kill p_name+"Kote.mif"
+		Kill p_name+"Kote.mid"
+	End If
+
+	If FileExists(p_name+"maaledata.mif") Then
+		Kill p_name+"maaledata.mif"
+		Kill p_name+"maaledata.mid"
+	End If
+
+	'Set Map Redraw On
+	Set Event Processing On
+
+	Exit sub
+
+End Sub
